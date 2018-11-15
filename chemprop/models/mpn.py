@@ -2,13 +2,29 @@ from argparse import Namespace
 from typing import List
 
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.parameter import Parameter
 import numpy as np
 
 from chemprop.features import BatchMolGraph, get_atom_fdim, get_bond_fdim, mol2graph
 from chemprop.nn_utils import create_mask, index_select_ND, visualize_atom_attention, visualize_bond_attention, \
     get_activation_function
+
+
+class Conv(nn.Module):
+    def __init__(self, hidden_size: int, num_filters: int):
+        super(Conv, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_filters = num_filters
+        self.weight = Parameter(torch.Tensor(self.hidden_size, self.num_filters, self.num_filters))
+
+    def forward(self, b_message: torch.FloatTensor) -> torch.FloatTensor:
+        b_message = b_message.unsqueeze(dim=3)  # num_bonds x hidden_size x num_filters x 1
+        b_message = torch.mul(b_message, self.weight)  # num_bonds x hidden_size x num_filters x num_filters
+        b_message = b_message.sum(dim=2)  # num_bonds x hidden_size x num_filters
+
+        return b_message
 
 
 class MPNEncoder(nn.Module):
@@ -38,6 +54,8 @@ class MPNEncoder(nn.Module):
         self.set2set = args.set2set
         self.set2set_iters = args.set2set_iters
         self.learn_virtual_edges = args.learn_virtual_edges
+        self.num_filters = args.num_filters
+        self.batch_size = args.batch_size
         self.args = args
 
         if args.features_only:
@@ -56,13 +74,15 @@ class MPNEncoder(nn.Module):
             w_h_input_size = self.hidden_size
 
         # Message passing
-
-        if self.diff_depth_weights:
-            # Different weight matrix for each depth
-            self.W_h = nn.ModuleList([nn.ModuleList([nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias) for _ in range(self.depth - 1)]) for _ in range(self.layers_per_message)])
+        if self.num_filters > 1:
+            self.W_h = Conv(self.hidden_size, self.num_filters)
         else:
-            # Shared weight matrix across depths
-            self.W_h = nn.ModuleList([nn.ModuleList([nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias)] * (self.depth - 1)) for _ in range(self.layers_per_message)])
+            if self.diff_depth_weights:
+                # Different weight matrix for each depth
+                self.W_h = nn.ModuleList([nn.ModuleList([nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias) for _ in range(self.depth - 1)]) for _ in range(self.layers_per_message)])
+            else:
+                # Shared weight matrix across depths
+                self.W_h = nn.ModuleList([nn.ModuleList([nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias)] * (self.depth - 1)) for _ in range(self.layers_per_message)])
 
         if self.global_attention:
             self.W_ga1 = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
@@ -148,6 +168,10 @@ class MPNEncoder(nn.Module):
         b_input = self.W_i(f_bonds)  # num_bonds x hidden_size
         b_message = self.act_func(b_input)  # num_bonds x hidden_size
 
+        if self.num_filters > 1:
+            b_message = b_message.unsqueeze(dim=2).repeat(1, 1, self.num_filters)  # num_bonds x hidden_size x num_filters
+            b_message_old = b_message.clone()
+
         if self.message_attention:
             b2b = mol_graph.get_b2b()  # Warning: this is O(n_atoms^3) when using virtual edges
 
@@ -170,6 +194,7 @@ class MPNEncoder(nn.Module):
         for depth in range(self.depth - 1):
             if self.learn_virtual_edges:
                 b_message = b_message * straight_through_mask
+
             if self.message_attention:
                 # TODO: Parallelize attention heads
                 nei_b_message = index_select_ND(b_message, b2b)
@@ -192,10 +217,15 @@ class MPNEncoder(nn.Module):
                 rev_b_message = b_message[b2revb]  # num_bonds x hidden
                 b_message = a_message[b2a] - rev_b_message  # num_bonds x hidden
 
-            for lpm in range(self.layers_per_message-1):
+            for lpm in range(self.layers_per_message - 1):
                 b_message = self.W_h[lpm][depth](b_message)  # num_bonds x hidden
                 b_message = self.act_func(b_message)
-            b_message = self.W_h[self.layers_per_message-1][depth](b_message)
+
+            if self.num_filters > 1:
+                b_message = self.W_h(b_message)  # num_bonds x hidden_size x num_filters
+            else:
+                b_message = self.W_h[self.layers_per_message - 1][depth](b_message)  # num_bonds x hidden
+
             if self.normalize_messages:
                 b_message = b_message / b_message.norm(dim=1, keepdim=True)
 
@@ -213,7 +243,10 @@ class MPNEncoder(nn.Module):
                 master_state = self.act_func(self.W_master_in(torch.stack(mol_vecs, dim=0)))  # num_bonds x hidden_size
                 b_message = self.act_func(b_input + b_message + self.W_master_out(master_state))  # num_bonds x hidden_size
             else:
-                b_message = self.act_func(b_input + b_message)  # num_bonds x hidden_size
+                if self.num_filters > 1:
+                    b_message = self.act_func(b_message_old + b_message)  # num_bonds x hidden_size x num_filters
+                else:
+                    b_message = self.act_func(b_input + b_message)  # num_bonds x hidden_size
 
             if self.global_attention:
                 attention_scores = torch.matmul(self.W_ga1(b_message), b_message.t())  # num_bonds x num_bonds
@@ -242,6 +275,9 @@ class MPNEncoder(nn.Module):
                     mol_vecs.append(master_state[start])
             return torch.stack(mol_vecs, dim=0)
 
+        if self.num_filters > 1:
+            b_message = b_message.sum(dim=2)  # num_bodns x hidden_size
+
         # Get atom hidden states from message hidden states
         if self.learn_virtual_edges:
             b_message = b_message * straight_through_mask
@@ -254,12 +290,11 @@ class MPNEncoder(nn.Module):
         # Readout
         if self.set2set:
             # Set up sizes
-            batch_size = len(a_scope)
             lengths = [length for _, length in a_scope]
             max_num_atoms = max(lengths)
 
             # Set up memory from atom features
-            memory = torch.zeros(batch_size, max_num_atoms, self.hidden_size)  # (batch_size, max_num_atoms, hidden_size)
+            memory = torch.zeros(self.batch_size, max_num_atoms, self.hidden_size)  # (batch_size, max_num_atoms, hidden_size)
             for i, (start, size) in enumerate(a_scope):
                 memory[i, :size] = atom_hiddens.narrow(0, start, size)
             memory_transposed = memory.transpose(2, 1)  # (batch_size, hidden_size, max_num_atoms)
@@ -269,7 +304,7 @@ class MPNEncoder(nn.Module):
             mask = mask.t().unsqueeze(2)  # (batch_size, max_num_atoms, 1)
 
             # Set up query
-            query = torch.ones(1, batch_size, self.hidden_size)  # (1, batch_size, hidden_size)
+            query = torch.ones(1, self.batch_size, self.hidden_size)  # (1, batch_size, hidden_size)
 
             # Move to cuda
             if next(self.parameters()).is_cuda:
@@ -285,7 +320,7 @@ class MPNEncoder(nn.Module):
 
                 # Construct next input as attention over memory
                 attended = torch.bmm(memory_transposed, attention)  # (batch_size, hidden_size, 1)
-                attended = attended.view(1, batch_size, self.hidden_size)  # (1, batch_size, hidden_size)
+                attended = attended.view(1, self.batch_size, self.hidden_size)  # (1, batch_size, hidden_size)
 
                 # Run RNN for one step
                 query, _ = self.set2set_rnn(attended)  # (1, batch_size, hidden_size)

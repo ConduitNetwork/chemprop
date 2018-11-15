@@ -151,6 +151,8 @@ def add_train_args(parser: ArgumentParser):
                         help='Whether to use a different weight matrix at each step of message passing')
     parser.add_argument('--layers_per_message', type=int, default=1,
                         help='Num linear layers between message passing steps')
+    parser.add_argument('--num_filters', type=int, default=1,
+                        help='Number of convolutional filters to applying during message passing steps')
     parser.add_argument('--layer_norm', action='store_true', default=False,
                         help='Add layer norm after each message passing step')
     parser.add_argument('--normalize_messages', action='store_true', default=False,
