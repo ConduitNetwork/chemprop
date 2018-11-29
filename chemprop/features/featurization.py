@@ -126,7 +126,8 @@ def bond_features(bond: Chem.rdchem.Bond,
 
     return fbond
 
-
+#TODO(mask): take an additional argument with tuples of indices corresponding to the collapsed atoms,
+# and give those collapsed atoms a feature vector of 0? or possibly something random on occasion?
 class MolGraph:
     def __init__(self, smiles: str, args: Namespace):
         self.smiles = smiles
@@ -225,6 +226,7 @@ class MolGraph:
 
 class BatchMolGraph:
     def __init__(self, mol_graphs: List[MolGraph], args: Namespace):
+        # this is only used in visualization; smiles strings will be incorrect when masking substructures
         self.smiles_batch = [mol_graph.smiles for mol_graph in mol_graphs]
         self.n_mols = len(self.smiles_batch)
 
@@ -310,6 +312,8 @@ class BatchMolGraph:
             elif rand < zero_prob + diff_prob:
                 f_atoms[i] = f_atoms[np.random.randint(len(f_atoms))]  # mask with different atom feature vector
             # mask with same atom feature vector (i.e. do nothing)
+            for bond_idx in self.a2b[i+1]:
+                self.f_bonds[self.b2revb[bond_idx]][:f_atoms[i].size(0)] = f_atoms[i]
         
         if self.bert_mask_bonds:
             for i in range(len(self.f_bonds)):
@@ -317,7 +321,7 @@ class BatchMolGraph:
                     # mask with zeros if both adjacent atoms are masked out; TODO could do something different too
                     self.f_bonds[i] = 0
         
-
+#TODO(mask) needs to take an optional list of lists of atom idx tuples to collapse, or maybe this is part of smiles_batch
 def mol2graph(smiles_batch: List[str],
               args: Namespace) -> BatchMolGraph:
     """
