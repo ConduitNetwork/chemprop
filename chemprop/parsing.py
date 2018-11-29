@@ -352,6 +352,9 @@ def modify_train_args(args: Namespace):
         assert args.features_path is None
         assert args.features_generator is None or args.features_generator == ['rdkit_2d']
 
+    if args.dataset_type == 'unsupervised':
+        args.separate_ffn_lr = True
+
     args.num_lrs = 1 + args.separate_ffn_lr
     lr_params = [args.init_lr, args.max_lr, args.final_lr, args.lr_scaler, args.warmup_epochs, args.weight_decay]
     for lr_param in lr_params:
@@ -389,9 +392,6 @@ def modify_train_args(args: Namespace):
             break
     else:
         args.prespecified_chunk_dir = None
-
-    if args.dataset_type == 'unsupervised':
-        args.separate_ffn_lr = True
 
 
 def parse_hyper_opt_args() -> Namespace:
