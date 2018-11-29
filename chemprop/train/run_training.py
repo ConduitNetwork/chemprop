@@ -124,7 +124,7 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
 
     if args.dataset_type == 'bert_pretraining':
         sum_test_preds = {
-            'features': np.zeros((len(test_smiles), args.features_size)),
+            'features': np.zeros((len(test_smiles), args.features_size)) if args.features_size is not None else None,
             'vocab': np.zeros((len(test_targets['vocab']), args.vocab.output_size))
         }
     else:
@@ -209,8 +209,9 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
             )
 
             if args.dataset_type == 'bert_pretraining':
-                debug('Validation features rmse = {:.3f}'.format(val_scores['features']))
-                writer.add_scalar('validation_features_rmse', val_scores['features'], n_iter)
+                if val_scores['features'] is not None:
+                    debug('Validation features rmse = {:.3f}'.format(val_scores['features']))
+                    writer.add_scalar('validation_features_rmse', val_scores['features'], n_iter)
                 val_scores = [val_scores['vocab']]
 
             # Average validation score
@@ -252,14 +253,16 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
         )
 
         if args.dataset_type == 'bert_pretraining':
-            sum_test_preds['features'] += np.array(test_preds['features'])
+            if test_preds['features'] is not None:
+                sum_test_preds['features'] += np.array(test_preds['features'])
             sum_test_preds['vocab'] += np.array(test_preds['vocab'])
         else:
             sum_test_preds += np.array(test_preds)
 
         if args.dataset_type == 'bert_pretraining':
-            debug('Model {} test features rmse = {:.3f}'.format(model_idx, test_scores['features']))
-            writer.add_scalar('test_features_rmse', test_scores['features'], 0)
+            if test_preds['features'] is not None:
+                debug('Model {} test features rmse = {:.3f}'.format(model_idx, test_scores['features']))
+                writer.add_scalar('test_features_rmse', test_scores['features'], 0)
             test_scores = [test_scores['vocab']]
 
         # Average test score
@@ -277,7 +280,7 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
     # Evaluate ensemble on test set
     if args.dataset_type == 'bert_pretraining':
         avg_test_preds = {
-            'features': (sum_test_preds['features'] / args.ensemble_size).tolist(),
+            'features': (sum_test_preds['features'] / args.ensemble_size).tolist() if sum_test_preds['features'] is not None else None,
             'vocab': (sum_test_preds['vocab'] / args.ensemble_size).tolist()
         }
     else:
@@ -292,8 +295,9 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
 
     # Average ensemble score
     if args.dataset_type == 'bert_pretraining':
-        info('Ensemble test features rmse = {:.3f}'.format(ensemble_scores['features']))
-        writer.add_scalar('ensemble_test_features_rmse', ensemble_scores['features'], 0)
+        if ensemble_scores['features'] is not None:
+            info('Ensemble test features rmse = {:.3f}'.format(ensemble_scores['features']))
+            writer.add_scalar('ensemble_test_features_rmse', ensemble_scores['features'], 0)
         ensemble_scores = [ensemble_scores['vocab']]
 
     avg_ensemble_test_score = np.mean(ensemble_scores)
