@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from .scaler import StandardScaler
 from .vocab import load_vocab, Vocab, get_substructures, substructure_to_feature
-from chemprop.features import morgan_fingerprint, rdkit_2d_features, get_kernel_func
+from chemprop.features import get_features_func, get_kernel_func
 
 
 class SparseNoneArray:
@@ -57,11 +57,13 @@ class MoleculeDatapoint:
 
             self.args = args
         else:
-            features_generator = self.bert_mask_prob = self.bert_mask_type = self.bert_vocab_func = self.substructure_sizes = self.args = None
+            features_generator = self.bert_mask_prob = self.bert_mask_type = self.bert_vocab_func = self.substructure_sizes = self.args = self.kernel = self.kernel_func = None
             predict_features = sparse = self.bert_pretraining = False
 
         if features is not None and features_generator is not None:
             raise ValueError('Currently cannot provide both loaded features and a features generator.')
+
+        self.features = features
 
         if use_compound_names:
             self.compound_name = line[0]  # str
@@ -72,37 +74,30 @@ class MoleculeDatapoint:
         self.smiles = line[0]  # str
         self.mol = Chem.MolFromSmiles(self.smiles)
 
-        if features is not None:
-            if len(features.shape) > 1:
-                features = np.squeeze(features)
-        self.features = features
-
         # Generate additional features if given a generator
         if features_generator is not None:
             self.features = []
+
             for fg in features_generator:
-                if fg == 'morgan':
-                    self.features.extend(morgan_fingerprint(self.mol))  # np.ndarray
-                elif fg == 'morgan_count':
-                    self.features.extend(morgan_fingerprint(self.mol, use_counts=True))
-                elif fg == 'rdkit_2d':
-                    self.features.extend(rdkit_2d_features(self.mol, args))
-                else:
-                    raise ValueError('features_generator type "{}" not supported.'.format(fg))
+                features_func = get_features_func(fg)
+                self.features.extend(features_func(self.mol, args))
+
             self.features = np.array(self.features)
+
+        # Fix nans in features
+        if self.features is not None:
+            replace_token = None if predict_features else 0
+            self.features = np.where(np.isnan(self.features), replace_token, self.features)
 
         if args is not None and args.dataset_type in ['unsupervised', 'bert_pretraining']:
             self.num_tasks = 1  # TODO could try doing "multitask" with multiple different clusters?
             self.targets = None
         elif args is not None and args.dataset_type == 'kernel':
-            if self.kernel_func in ['morgan', 'morgan_count', 'WL']:
-                self.num_tasks = 1
-            else:
-                raise ValueError('kernel func "{}" not supported.'.format(self.kernel_func))
+            self.num_tasks = 1
             self.targets = None
         else:
             if predict_features:
-                self.targets = self.features  # List[float]
+                self.targets = self.features
             else:
                 self.targets = [float(x) if x != '' else None for x in line[1:]]  # List[Optional[float]]
 
@@ -209,7 +204,7 @@ class MoleculeDataset(Dataset):
             # want an even number of data points
             if len(self.data) % 2 == 1:
                 self.data = self.data[:-1]
-        self.kernel_func = get_kernel_func(self.data[0].kernel_func) if len(self.data) > 0 else None
+        self.kernel_func = get_kernel_func(self.data[0].kernel_func) if len(self.data) > 0 and self.data[0].kernel_func is not None else None
         self.features_size = len(self.data[0].features) if len(self.data) > 0 and self.data[0].features is not None else None
         self.args = self.data[0].args if len(self.data) > 0 else None
         self.scaler = None
@@ -277,7 +272,7 @@ class MoleculeDataset(Dataset):
             }
 
         if self.kernel:
-            return [self.kernel_func(*pair, self.args) for pair in self.pairs()]
+            return [[self.kernel_func(*pair)] for pair in self.pairs()]
 
         return [d.targets for d in self.data]
 

@@ -44,13 +44,10 @@ def add_train_args(parser: ArgumentParser):
                         help='Path to .vocab file if using jtnn')
     parser.add_argument('--features_only', action='store_true', default=False,
                         help='Use only the additional features in an FFN, no graph network')
-    parser.add_argument('--features_generator', type=str, nargs='*', choices=['morgan', 'morgan_count', 'rdkit_2d'],
+    parser.add_argument('--features_generator', type=str, nargs='*', choices=['morgan', 'morgan_count', 'rdkit_2d', 'mordred'],
                         help='Method of generating additional features')  # TODO allow multiple options
     parser.add_argument('--features_path', type=str,
                         help='Path to features to use in FNN (instead of features_generator)')
-    parser.add_argument('--save_features_path', type=str,
-                        help='Optional path to save computed features, to save time on future runs.'
-                             'Does not support all possible training configurations, though.')
     parser.add_argument('--predict_features', action='store_true', default=False,
                         help='Pre-train by predicting the additional features rather than the task values')
     parser.add_argument('--additional_atom_features', type=str, nargs='*', choices=['functional_group'], default=[],
@@ -182,8 +179,8 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument('--additional_output_features', type=str, nargs='*', choices=['functional_group'], default=[],
                         help='Use additional features in bert output features to predict,'
                              'but not in original input atom features. Only supported for bert_vocab_func = feature_vector.')
-    parser.add_argument('--kernel_func', type=str, default='morgan',
-                        choices=['morgan', 'morgan_count', 'WL'],
+    parser.add_argument('--kernel_func', type=str, default='features',
+                        choices=['features', 'WL'],
                         help='Kernel function for kernel pretraining')
     parser.add_argument('--last_batch', action='store_true', default=False,
                         help='Whether to include the last batch in each training epoch even if'
@@ -332,8 +329,10 @@ def modify_train_args(args: Namespace):
                 if args.metric not in ['log_loss', 'argmax_accuracy', 'majority_baseline_accuracy']:
                     args.metric = 'log_loss'
         elif args.dataset_type == 'kernel':
-            if args.kernel_func in ['morgan', 'morgan_count', 'WL']:  # could have other kernel_funcs with different metrics
+            if args.kernel_func in ['features', 'WL']:  # could have other kernel_funcs with different metrics
                 args.metric = 'rmse'
+            else:
+                raise ValueError('metric not implemented for kernel function "{}".'.format(args.kernel_func))
         else:
             args.metric = 'rmse'
 
@@ -355,7 +354,7 @@ def modify_train_args(args: Namespace):
 
     args.use_input_features = args.features_generator or args.features_path
 
-    if args.predict_features:
+    if args.predict_features or args.kernel_func == 'features':
         assert args.features_generator or args.features_path
         args.use_input_features = False
 
