@@ -93,6 +93,8 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument('--split_type', type=str, default='random',
                         choices=['random', 'scaffold', 'scaffold_one', 'scaffold_overlap', 'predetermined'],
                         help='Method of splitting the data into train/val/test')
+    parser.add_argument('--split_test_by_overlap_dataset', type=str,
+                        help='Dataset to use to split test set by overlap')
     parser.add_argument('--scaffold_overlap', type=float, default=None,
                         help='Proportion of molecules in val/test sets which should contain scaffolds in the train set'
                              'For use when split_type == "scaffold_overlap"')
@@ -366,10 +368,7 @@ def modify_train_args(args: Namespace):
         args.use_input_features = False
 
     if args.dataset_type == 'bert_pretraining':
-        assert not args.use_input_features
         assert not args.features_only
-        assert args.features_path is None
-        assert args.features_generator is None or args.features_generator == ['rdkit_2d']
 
     if args.dataset_type == 'unsupervised':
         args.separate_ffn_lr = True
