@@ -166,6 +166,11 @@ def add_train_args(parser: ArgumentParser):
                         help='Maximum gradient norm when performing gradient clipping')
     parser.add_argument('--weight_decay', type=float, nargs='*', default=[0.0],
                         help='L2 penalty on optimizer to keep parameter norms small')
+    parser.add_argument('--adjust_weight_decay', action='store_true', default=False,
+                        help='Adjust weight decay dynamically, with init = args.weight_decay'
+                             'to try to preserve pnorm around initialization level')
+    parser.add_argument('--adjust_weight_decay_step', type=float, default=1e-5,
+                        help='How much to add/subtract from weight decay at a time, when adjusting')
     parser.add_argument('--bert_mask_prob', type=float, default=0.15,
                         help='Probability of masking when dataset_type == "bert_pretraining"')
     parser.add_argument('--bert_vocab_func', type=str, default='feature_vector',
