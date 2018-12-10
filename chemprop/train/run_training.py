@@ -59,6 +59,13 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
         else:
             train_data, val_data, test_data = split_data(data, args, sizes=args.split_sizes, seed=args.seed, logger=logger)
 
+    if args.save_smiles_splits:
+        for dataset, name in [(train_data, 'train_smiles.csv'), (val_data, 'val_smiles.csv'), (test_data, 'test_smiles.csv')]:
+            with open(os.path.join(args.save_dir, name), 'w') as f:
+                f.write('smiles\n')
+                for smiles in dataset.smiles():
+                    f.write(smiles.strip() + '\n')
+
     features_scaler = train_data.normalize_features(replace_nan_token=None if args.predict_features else 0)
     val_data.normalize_features(features_scaler)
     test_data.normalize_features(features_scaler)
@@ -271,19 +278,22 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
                 )
                 avg_test_score = np.mean(test_scores)
                 info('Model {} test {} for {} = {:.3f}'.format(model_idx, args.metric, name, avg_test_score))
-
-        test_preds = predict(
-            model=model,
-            data=test_data,
-            args=args,
-            scaler=scaler
-        )
-        test_scores = evaluate_predictions(
-            preds=test_preds,
-            targets=test_targets,
-            metric_func=metric_func,
-            args=args
-        )
+        
+        if len(test_data) == 0:  # just get some garbage results without crashing; in this case we didn't care anyway
+            test_preds, test_scores = sum_test_preds, [0 for _ in range(len(args.task_names))]
+        else:
+            test_preds = predict(
+                model=model,
+                data=test_data,
+                args=args,
+                scaler=scaler
+            )
+            test_scores = evaluate_predictions(
+                preds=test_preds,
+                targets=test_targets,
+                metric_func=metric_func,
+                args=args
+            )
 
         if args.dataset_type == 'bert_pretraining':
             if test_preds['features'] is not None:
@@ -319,12 +329,15 @@ def run_training(args: Namespace, logger: Logger = None) -> List[float]:
     else:
         avg_test_preds = (sum_test_preds / args.ensemble_size).tolist()
 
-    ensemble_scores = evaluate_predictions(
-        preds=avg_test_preds,
-        targets=test_targets,
-        metric_func=metric_func, 
-        args=args
-    )
+    if len(test_data) == 0:  # just return some garbage when we didn't want test data
+        ensemble_scores = test_scores
+    else:
+        ensemble_scores = evaluate_predictions(
+            preds=avg_test_preds,
+            targets=test_targets,
+            metric_func=metric_func, 
+            args=args
+        )
 
     # Average ensemble score
     if args.dataset_type == 'bert_pretraining':
